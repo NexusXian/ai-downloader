@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+/* Design tokens lifted from the reference UI's compiled CSS rather than eyeballed:
+   primary hsl(215.17 100% 54.51%), hero gradients #2eadfd->#85e4fe and #3e9fff->#2563eb,
+   page wash #e3eeff->#f7faff->#fff, VIP gold #ffb801.
+   Deliberately light and airy -- the reference is not a dark theme. */
+@theme {
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #c0e3ff;
+  --color-brand-300: #85e4fe;
+  --color-brand-400: #3e9fff;
+  --color-brand-500: #1478ff;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-cyan: #2eadfd;
+
+  --color-gold-300: #fcefc2;
+  --color-gold-400: #ffd166;
+  --color-gold-500: #ffb801;
+  --color-gold-600: #e09b00;
+
+  --color-ink-500: #64748b;
+  --color-ink-700: #334155;
+  --color-ink-900: #0f172a;
+
+  --radius-card: 0.75rem;
+
+  --shadow-soft: 0 2px 8px rgb(0 0 0 / 0.06);
+  --shadow-card: 0 4px 24px rgb(15 23 42 / 0.06);
+  --shadow-lift: 0 12px 40px rgb(20 120 255 / 0.16);
+  --shadow-gold: 0 10px 30px rgb(255 184 1 / 0.24);
+
+  --font-sans: "MiSans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --page-wash: linear-gradient(
+    0deg,
+    #e3eeff 0%,
+    #e3eeff 0.573%,
+    #f7faff 28.292%,
+    #ffffff 46.935%
+  );
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--page-wash);
+  background-attachment: fixed;
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Utilities ---------------------------------------------------------------- */
+
+@utility glass {
+  background: rgb(255 255 255 / 0.72);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgb(255 255 255 / 0.9);
+}
+
+@utility card-surface {
+  background: #fff;
+  border: 1px solid rgb(226 232 240 / 0.9);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+@utility text-gradient-brand {
+  background: linear-gradient(96deg, #2eadfd 0%, #1478ff 46%, #2563eb 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+@utility text-gradient-gold {
+  background: linear-gradient(96deg, #ffd166 0%, #ffb801 50%, #e09b00 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Soft blur ornaments -- the reference leans on these heavily (blur 40/90/100px). */
+@utility orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(90px);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@utility hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* Animations --------------------------------------------------------------- */
+
+@keyframes float-slow {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(0, -18px, 0) scale(1.04); }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgb(20 120 255 / 0.35); }
+  70% { box-shadow: 0 0 0 14px rgb(20 120 255 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(20 120 255 / 0); }
+}
+
+@utility animate-float {
+  animation: float-slow 11s ease-in-out infinite;
+}
+
+@utility animate-rise {
+  animation: rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@utility animate-pulse-ring {
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+@utility shimmer-bar {
+  background: linear-gradient(
+    90deg,
+    rgb(255 255 255 / 0) 0%,
+    rgb(255 255 255 / 0.55) 50%,
+    rgb(255 255 255 / 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #e2e8f0;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #cbd5e1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

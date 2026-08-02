@@ -1,0 +1,20 @@
+# secrets — never commit
+backend/.env
+frontend/.env.local
+.claude/settings.local.json
+
+# python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# downloaded media (transient)
+backend/_jobs/
+
+# node / next
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+.DS_Store

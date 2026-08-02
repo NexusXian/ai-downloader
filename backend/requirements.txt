@@ -1,0 +1,22 @@
+# Pinned deliberately. yt-dlp extractors break as sites change, so bumps should be
+# intentional: `pip install -U yt-dlp` when a site stops working.
+#
+# yt-dlp[default] pulls in certifi, which also fixes TLS on interpreters that ship
+# without root CAs (see README: this machine has one such Python).
+yt-dlp[default]==2026.7.4
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+
+# starlette>=0.49.1 is a security floor, not a preference: GHSA-7f5h-v6xp-fcq8 is a
+# Range-header O(n^2) DoS in FileResponse affecting 0.39.0-0.49.0, and we serve
+# finished downloads via FileResponse.
+starlette>=0.49.1
+
+itsdangerous==2.2.0
+python-dotenv==1.2.2
+anthropic==0.120.2
+
+# tests
+pytest==9.1.1
+httpx==0.28.1
