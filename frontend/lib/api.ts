@@ -23,6 +23,51 @@ export type JobStatus =
   | "error"
   | "expired";
 
+export type SummaryStatus =
+  | "queued"
+  | "extracting"
+  | "transcribing"
+  | "summarizing"
+  | "done"
+  | "error"
+  | "expired";
+
+export type MindMapStatus = "idle" | "queued" | "generating" | "done" | "error";
+
+export interface SummaryJob {
+  job_id: string;
+  status: SummaryStatus;
+  title: string;
+  percent: number;
+  error: string | null;
+  transcript_source: "manual_caption" | "automatic_caption" | "local_whisper" | null;
+  transcript_lang: string | null;
+  ready: boolean;
+  transcript_ready: boolean;
+  mind_map_status: MindMapStatus;
+  mind_map_percent: number;
+  mind_map_error: string | null;
+  mind_map_ready: boolean;
+  created_at: number;
+  updated_at: number;
+  expires_at: number;
+}
+
+/** Server-validated outline tree. Ids and bounds are assigned by the backend. */
+export interface MindMapNode {
+  id: string;
+  label: string;
+  timestamp: number | null;
+  children: MindMapNode[];
+}
+
+export interface MindMap {
+  root: MindMapNode;
+  node_count: number;
+}
+
+export type MindMapExportFormat = "json" | "markdown" | "opml";
+
 export interface FormatOption {
   height: number;
   label: string;
@@ -103,6 +148,18 @@ export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
 }
 
+async function errorFromResponse(res: Response): Promise<ApiError> {
+  let detail = `请求失败 (${res.status})`;
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === "string") detail = body.detail;
+    else if (Array.isArray(body?.detail)) detail = "请求参数不正确";
+  } catch {
+    /* non-JSON error body */
+  }
+  return new ApiError(res.status, detail);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -119,18 +176,44 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
-    let detail = `请求失败 (${res.status})`;
-    try {
-      const body = await res.json();
-      if (typeof body?.detail === "string") detail = body.detail;
-      else if (Array.isArray(body?.detail)) detail = "请求参数不正确";
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new ApiError(res.status, detail);
+    throw await errorFromResponse(res);
   }
 
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+}
+
+async function requestBlob(path: string): Promise<Blob> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { headers });
+  } catch {
+    throw new ApiError(0, "无法连接服务器，请确认后端已启动");
+  }
+
+  if (!res.ok) {
+    throw await errorFromResponse(res);
+  }
+  return res.blob();
+}
+
+async function requestText(path: string): Promise<string> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { headers });
+  } catch {
+    throw new ApiError(0, "无法连接服务器，请确认后端已启动");
+  }
+
+  if (!res.ok) throw await errorFromResponse(res);
+  return res.text();
 }
 
 export const api = {
@@ -161,16 +244,36 @@ export const api = {
 
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
 
+  createSummaryJob: (input: {
+    url: string;
+    title?: string | null;
+    source_lang: string;
+    output_lang: "zh-CN" | "en";
+  }) =>
+    request<SummaryJob>("/api/ai/jobs", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  summaryJob: (id: string) => request<SummaryJob>(`/api/ai/jobs/${id}`),
+
+  summaryResult: (id: string) =>
+    requestText(`/api/ai/jobs/${id}/result`),
+
+  summaryExport: (id: string) => requestBlob(`/api/ai/jobs/${id}/export`),
+
+  createMindMap: (id: string) =>
+    request<SummaryJob>(`/api/ai/jobs/${id}/mind-map`, { method: "POST" }),
+
+  mindMap: (id: string) => request<MindMap>(`/api/ai/jobs/${id}/mind-map`),
+
+  mindMapExport: (id: string, format: MindMapExportFormat) =>
+    requestBlob(`/api/ai/jobs/${id}/mind-map/export?format=${format}`),
+
   redeem: (code: string) =>
     request<{ token: string; tier: string; expires_in: number }>(
       "/api/redeem",
       { method: "POST", body: JSON.stringify({ code }) },
-    ),
-
-  aiSummary: (url: string, title?: string | null) =>
-    request<{ summary: string; source_lang: string; model: string }>(
-      "/api/ai/summary",
-      { method: "POST", body: JSON.stringify({ url, title }) },
     ),
 
   aiTranslate: (url: string, target_lang = "简体中文") =>
@@ -192,6 +295,9 @@ export const api = {
    * file, and the HTML download attribute is ignored cross-origin.
    */
   fileUrl: (id: string) => `${API_BASE}/api/jobs/${id}/file`,
+
+  /** Same bytes as fileUrl, served inline so a <video> element can seek it. */
+  playUrl: (id: string) => `${API_BASE}/api/jobs/${id}/play`,
 };
 
 /** Poll until the job settles. Simpler than SSE and immune to proxy buffering. */
@@ -243,6 +349,125 @@ export function pollJob(
     stopped = true;
     clearTimeout(timer);
   };
+}
+
+export function pollSummaryJob(
+  id: string,
+  onUpdate: (job: SummaryJob) => void,
+  intervalMs = 1000,
+  onError?: (error: ApiError) => void,
+  onAuthRequired?: (error: ApiError) => void,
+): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const job = await api.summaryJob(id);
+      if (stopped) return;
+      onUpdate(job);
+      if (job.status === "done" || job.status === "error" || job.status === "expired") {
+        stop();
+        return;
+      }
+    } catch (err) {
+      if (stopped) return;
+      if (err instanceof ApiError && err.status === 404) {
+        stop();
+        onUpdate({
+          job_id: id,
+          status: "expired",
+          title: "",
+          percent: 0,
+          error: "总结任务已过期，请重新生成",
+          transcript_source: null,
+          transcript_lang: null,
+          ready: false,
+          transcript_ready: false,
+          mind_map_status: "idle",
+          mind_map_percent: 0,
+          mind_map_error: null,
+          mind_map_ready: false,
+          created_at: 0,
+          updated_at: 0,
+          expires_at: 0,
+        });
+        return;
+      }
+      if (err instanceof ApiError && err.status === 402) {
+        stop();
+        onAuthRequired?.(err);
+        return;
+      }
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+        stop();
+        onError?.(err);
+        return;
+      }
+    }
+    if (!stopped) timer = setTimeout(tick, intervalMs);
+  };
+
+  void tick();
+  return stop;
+}
+
+/**
+ * Poll a summary job until its mind map settles.
+ *
+ * Mind map state rides on the summary job, so this reads the same status endpoint
+ * and stops on the mind map's terminal states rather than the summary's.
+ */
+export function pollMindMap(
+  id: string,
+  onUpdate: (job: SummaryJob) => void,
+  intervalMs = 1000,
+  onError?: (error: ApiError) => void,
+): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const job = await api.summaryJob(id);
+      if (stopped) return;
+      onUpdate(job);
+      if (job.mind_map_status === "done" || job.mind_map_status === "error") {
+        stop();
+        return;
+      }
+    } catch (err) {
+      if (stopped) return;
+      if (err instanceof ApiError && err.status === 404) {
+        stop();
+        onError?.(new ApiError(404, "总结任务已过期，请重新生成"));
+        return;
+      }
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+        stop();
+        onError?.(err);
+        return;
+      }
+    }
+    if (!stopped) timer = setTimeout(tick, intervalMs);
+  };
+
+  void tick();
+  return stop;
 }
 
 // --- formatting helpers -----------------------------------------------------

@@ -6,14 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --import ./tests/alias-register.mjs --test \"tests/**/*.test.mjs\"",
+    "check:contracts": "node scripts/check-ai-contract.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
     "lucide-react": "^1.28.0",
+    "markmap-view": "0.18.12",
     "next": "16.2.12",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {

@@ -36,10 +36,16 @@ export function Downloader({
   limits,
   onUpgrade,
   onProbed,
+  onPlayableJob,
+  summarySlot,
 }: {
   limits: Limits | null;
   onUpgrade: () => void;
   onProbed?: (probe: ProbeResult | null) => void;
+  /** Reports a finished video download, which the mind map uses to seek. */
+  onPlayableJob?: (jobId: string | null) => void;
+  /** Rendered beside the probed video so details and summary share one screen. */
+  summarySlot?: React.ReactNode;
 }) {
   const [url, setUrl] = React.useState("");
   const [probing, setProbing] = React.useState(false);
@@ -51,16 +57,45 @@ export function Downloader({
   const [job, setJob] = React.useState<Job | null>(null);
   const [starting, setStarting] = React.useState(false);
   const stopRef = React.useRef<(() => void) | null>(null);
+  const requestGenerationRef = React.useRef(0);
 
-  React.useEffect(() => () => stopRef.current?.(), []);
+  React.useEffect(() => () => {
+    requestGenerationRef.current += 1;
+    stopRef.current?.();
+  }, []);
+
+  const reportPlayableJob = React.useEffectEvent((jobId: string | null) => {
+    onPlayableJob?.(jobId);
+  });
+
+  React.useEffect(() => {
+    // Only a finished video file can back the player; audio and subtitle jobs
+    // produce files a <video> element cannot seek meaningfully.
+    const playable =
+      job !== null && job.status === "done" && job.mode === "video"
+        ? job.job_id
+        : null;
+    reportPlayableJob(playable);
+  }, [job]);
 
   const maxHeight = limits?.max_height ?? 720;
 
   const reset = () => {
     stopRef.current?.();
+    stopRef.current = null;
     setJob(null);
     setError(null);
   };
+
+  function handleUrlChange(nextUrl: string) {
+    setUrl(nextUrl);
+    requestGenerationRef.current += 1;
+    setProbing(false);
+    setStarting(false);
+    setProbe(null);
+    reset();
+    onProbed?.(null);
+  }
 
   async function handleProbe(e?: React.FormEvent) {
     e?.preventDefault();
@@ -69,12 +104,16 @@ export function Downloader({
       setError("请先粘贴视频链接");
       return;
     }
+    const request = ++requestGenerationRef.current;
     reset();
-    setProbe(null);
     setProbing(true);
     try {
       const result = await api.probe(trimmed);
-      setProbe(result);
+      if (requestGenerationRef.current !== request) return;
+      // Re-parsing the same link keeps the previous result object. Consumers key
+      // AI state by probe URL, so replacing an identical result would restart a
+      // running summary and spend AI credits again.
+      setProbe((current) => (current?.url === result.url ? current : result));
       onProbed?.(result);
       // Default to the best quality the tier allows.
       const allowed = result.formats.filter((f) => f.height <= maxHeight);
@@ -84,29 +123,37 @@ export function Downloader({
         langs.find((l) => l.startsWith("zh")) ?? langs.find((l) => l.startsWith("en")) ?? langs[0] ?? null,
       );
     } catch (err) {
+      if (requestGenerationRef.current !== request) return;
       setProbe(null);
       onProbed?.(null);
       setError(err instanceof ApiError ? err.message : "解析失败，请稍后重试");
     } finally {
-      setProbing(false);
+      if (requestGenerationRef.current === request) setProbing(false);
     }
   }
 
   async function handleStart(nextMode: JobMode) {
     if (!probe) return;
+    const currentProbe = probe;
+    const request = ++requestGenerationRef.current;
     setMode(nextMode);
     reset();
     setStarting(true);
     try {
       const created = await api.createJob({
-        url: probe.url,
+        url: currentProbe.url,
         mode: nextMode,
         height: nextMode === "video" ? height : null,
         subtitle_lang: nextMode === "subtitle" ? subtitleLang : null,
       });
+      if (requestGenerationRef.current !== request) return;
       setJob(created);
-      stopRef.current = pollJob(created.job_id, setJob);
+      stopRef.current = pollJob(created.job_id, (nextJob) => {
+        if (requestGenerationRef.current !== request) return;
+        setJob(nextJob);
+      });
     } catch (err) {
+      if (requestGenerationRef.current !== request) return;
       if (isUpgradeRequired(err)) {
         onUpgrade();
         setError(err instanceof ApiError ? err.message : null);
@@ -114,7 +161,7 @@ export function Downloader({
         setError(err instanceof ApiError ? err.message : "启动下载失败");
       }
     } finally {
-      setStarting(false);
+      if (requestGenerationRef.current === request) setStarting(false);
     }
   }
 
@@ -122,167 +169,182 @@ export function Downloader({
     job !== null &&
     ["queued", "probing", "downloading", "merging", "converting"].includes(job.status);
 
+  // Widen only once there is something to place beside the video: the empty hero
+  // stays a narrow, centred search box.
+  const hasWorkspace = probe !== null;
+
   return (
-    <div className="mx-auto w-full max-w-3xl">
-      <form onSubmit={handleProbe} className="relative">
-        <div className="glass flex flex-col gap-2 rounded-2xl p-2 shadow-lift sm:flex-row sm:items-center sm:rounded-full sm:p-1.5">
-          <div className="flex flex-1 items-center gap-2 px-3">
-            <Icon path={P.link} className="size-5 shrink-0 text-brand-500" />
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              inputMode="url"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="视频链接"
-              placeholder="粘贴视频链接，支持 YouTube / B站 / 抖音 / 小红书…"
-              className="h-11 w-full min-w-0 bg-transparent text-[15px] text-ink-900 outline-none placeholder:text-ink-500/70"
-            />
-            {url && (
-              <button
-                type="button"
-                onClick={() => {
-                  setUrl("");
-                  setProbe(null);
-                  reset();
-                }}
-                aria-label="清空"
-                className="rounded-full p-1 text-ink-500 transition hover:bg-slate-100"
-              >
-                <Icon path={P.x} className="size-4" />
-              </button>
-            )}
-          </div>
-          <Button
-            type="submit"
-            size="lg"
-            loading={probing}
-            className="w-full shrink-0 sm:w-auto sm:rounded-full"
-          >
-            {probing ? "解析中…" : "立即解析"}
-            {!probing && <Icon path={P.bolt} className="size-4" fill />}
-          </Button>
-        </div>
-      </form>
-
-      <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-ink-500">
-        <span className="inline-flex items-center gap-1">
-          <Icon path={P.shield} className="size-3.5" /> 无需注册
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Icon path={P.bolt} className="size-3.5" /> 服务器直连加速
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Icon path={P.phone} className="size-3.5" /> 手机可直接保存
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Icon path={P.globe} className="size-3.5" /> 1800+ 平台
-        </span>
-      </div>
-
-      {error && (
-        <Alert className="mt-4 animate-rise" tone="error">
-          <span className="inline-flex items-start gap-2">
-            <Icon path={P.alert} className="mt-0.5 size-4 shrink-0" />
-            <span>{error}</span>
-          </span>
-        </Alert>
+    <div
+      className={cn(
+        "mx-auto w-full transition-[max-width] duration-500",
+        hasWorkspace ? "max-w-6xl" : "max-w-3xl",
       )}
-
-      {probe && (
-        <Card className="animate-rise mt-5 overflow-hidden text-left">
-          <div className="flex gap-4 p-4 sm:p-5">
-            {probe.thumbnail ? (
-              // Plain <img>: thumbnails come from arbitrary platform CDNs, and
-              // next/image would need every one allowlisted in next.config.
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={probe.thumbnail}
-                alt=""
-                className="hidden h-[76px] w-[135px] shrink-0 rounded-lg bg-slate-100 object-cover sm:block"
-                loading="lazy"
-                // Some CDNs reject a foreign Referer; sending none is more reliable.
-                referrerPolicy="no-referrer"
+    >
+      <div className="mx-auto w-full max-w-3xl">
+        <form onSubmit={handleProbe} className="relative">
+          <div className="glass flex flex-col gap-2 rounded-2xl p-2 shadow-lift sm:flex-row sm:items-center sm:rounded-full sm:p-1.5">
+            <div className="flex flex-1 items-center gap-2 px-3">
+              <Icon path={P.link} className="size-5 shrink-0 text-brand-500" />
+              <input
+                value={url}
+                onChange={(e) => handleUrlChange(e.target.value)}
+                inputMode="url"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="视频链接"
+                placeholder="粘贴视频链接，支持 YouTube / B站 / 抖音 / 小红书…"
+                className="h-11 w-full min-w-0 bg-transparent text-[15px] text-ink-900 outline-none placeholder:text-ink-500/70"
               />
-            ) : null}
-            <div className="min-w-0 flex-1 text-left">
-              <h3 className="line-clamp-2 text-[15px] font-semibold leading-snug text-ink-900">
-                {probe.title}
-              </h3>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-500">
-                {probe.extractor && <Badge tone="brand">{probe.extractor}</Badge>}
-                {probe.uploader && (
-                  <span className="inline-flex items-center gap-1">
-                    <Icon path={P.users} className="size-3.5" />
-                    <span className="max-w-[10rem] truncate">{probe.uploader}</span>
-                  </span>
-                )}
-                {probe.duration ? (
-                  <span className="inline-flex items-center gap-1">
-                    <Icon path={P.clock} className="size-3.5" />
-                    {formatDuration(probe.duration)}
-                  </span>
-                ) : null}
-                {probe.is_live && <Badge tone="amber">直播中</Badge>}
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-slate-100 bg-slate-50/60 p-4 sm:p-5">
-            <ModeTabs
-              mode={mode}
-              onChange={setMode}
-              hasSubtitles={probe.has_subtitles}
-              isPro={limits?.is_pro ?? false}
-            />
-
-            {mode === "video" && (
-              <FormatPicker
-                formats={probe.formats}
-                selected={height}
-                onSelect={setHeight}
-                maxHeight={maxHeight}
-                isPro={limits?.is_pro ?? false}
-                onUpgrade={onUpgrade}
-              />
-            )}
-
-            {mode === "audio" && (
-              <p className="mt-4 text-sm text-ink-500">
-                将提取音频并转换为 MP3（192kbps），适合做铃声、听课或音乐收藏。
-              </p>
-            )}
-
-            {mode === "subtitle" && (
-              <SubtitlePicker
-                probe={probe}
-                selected={subtitleLang}
-                onSelect={setSubtitleLang}
-              />
-            )}
-
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Button
-                size="lg"
-                onClick={() => handleStart(mode)}
-                loading={starting || busy}
-                disabled={mode === "subtitle" && !subtitleLang}
-                className="w-full sm:w-auto"
-              >
-                <Icon path={P.download} className="size-4" />
-                {busy ? STATUS_TEXT[job!.status] : "开始下载"}
-              </Button>
-              {mode === "video" && height && height > 1080 && (
-                <span className="text-xs text-ink-500">
-                  超清文件较大，建议在 Wi-Fi 下载
-                </span>
+              {url && (
+                <button
+                  type="button"
+                  onClick={() => handleUrlChange("")}
+                  aria-label="清空"
+                  className="rounded-full p-1 text-ink-500 transition hover:bg-slate-100"
+                >
+                  <Icon path={P.x} className="size-4" />
+                </button>
               )}
             </div>
+            <Button
+              type="submit"
+              size="lg"
+              loading={probing}
+              className="w-full shrink-0 sm:w-auto sm:rounded-full"
+            >
+              {probing ? "解析中…" : "立即解析"}
+              {!probing && <Icon path={P.bolt} className="size-4" fill />}
+            </Button>
           </div>
-        </Card>
-      )}
+        </form>
 
-      {job && <JobProgress job={job} onRetry={() => handleStart(job.mode)} />}
+        {!hasWorkspace && (
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-ink-500">
+            <span className="inline-flex items-center gap-1">
+              <Icon path={P.shield} className="size-3.5" /> 无需注册
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Icon path={P.bolt} className="size-3.5" /> 服务器直连加速
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Icon path={P.phone} className="size-3.5" /> 手机可直接保存
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Icon path={P.globe} className="size-3.5" /> 1800+ 平台
+            </span>
+          </div>
+        )}
+
+        {error && (
+          <Alert className="mt-4 animate-rise" tone="error">
+            <span className="inline-flex items-start gap-2">
+              <Icon path={P.alert} className="mt-0.5 size-4 shrink-0" />
+              <span>{error}</span>
+            </span>
+          </Alert>
+        )}
+      </div>
+
+      {hasWorkspace && (
+        <div className="mt-5 grid items-start gap-5 text-left lg:grid-cols-2">
+          <div className="min-w-0">
+            <Card className="animate-rise overflow-hidden text-left">
+              <div className="flex gap-4 p-4 sm:p-5">
+                {probe.thumbnail ? (
+                  // Plain <img>: thumbnails come from arbitrary platform CDNs, and
+                  // next/image would need every one allowlisted in next.config.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={probe.thumbnail}
+                    alt=""
+                    className="hidden h-[76px] w-[135px] shrink-0 rounded-lg bg-slate-100 object-cover sm:block"
+                    loading="lazy"
+                    // Some CDNs reject a foreign Referer; sending none is more reliable.
+                    referrerPolicy="no-referrer"
+                  />
+                ) : null}
+                <div className="min-w-0 flex-1 text-left">
+                  <h3 className="line-clamp-2 text-[15px] font-semibold leading-snug text-ink-900">
+                    {probe.title}
+                  </h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-500">
+                    {probe.extractor && <Badge tone="brand">{probe.extractor}</Badge>}
+                    {probe.uploader && (
+                      <span className="inline-flex items-center gap-1">
+                        <Icon path={P.users} className="size-3.5" />
+                        <span className="max-w-[10rem] truncate">{probe.uploader}</span>
+                      </span>
+                    )}
+                    {probe.duration ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Icon path={P.clock} className="size-3.5" />
+                        {formatDuration(probe.duration)}
+                      </span>
+                    ) : null}
+                    {probe.is_live && <Badge tone="amber">直播中</Badge>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 bg-slate-50/60 p-4 sm:p-5">
+                <ModeTabs
+                  mode={mode}
+                  onChange={setMode}
+                  hasSubtitles={probe.has_subtitles}
+                  isPro={limits?.is_pro ?? false}
+                />
+
+                {mode === "video" && (
+                  <FormatPicker
+                    formats={probe.formats}
+                    selected={height}
+                    onSelect={setHeight}
+                    maxHeight={maxHeight}
+                    isPro={limits?.is_pro ?? false}
+                    onUpgrade={onUpgrade}
+                  />
+                )}
+
+                {mode === "audio" && (
+                  <p className="mt-4 text-sm text-ink-500">
+                    将提取音频并转换为 MP3（192kbps），适合做铃声、听课或音乐收藏。
+                  </p>
+                )}
+
+                {mode === "subtitle" && (
+                  <SubtitlePicker
+                    probe={probe}
+                    selected={subtitleLang}
+                    onSelect={setSubtitleLang}
+                  />
+                )}
+
+                <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Button
+                    size="lg"
+                    onClick={() => handleStart(mode)}
+                    loading={starting || busy}
+                    disabled={mode === "subtitle" && !subtitleLang}
+                    className="w-full sm:w-auto"
+                  >
+                    <Icon path={P.download} className="size-4" />
+                    {busy ? STATUS_TEXT[job!.status] : "开始下载"}
+                  </Button>
+                  {mode === "video" && height && height > 1080 && (
+                    <span className="text-xs text-ink-500">
+                      超清文件较大，建议在 Wi-Fi 下载
+                    </span>
+                  )}
+                </div>
+              </div>
+            </Card>
+
+            {job && <JobProgress job={job} onRetry={() => handleStart(job.mode)} />}
+          </div>
+
+          {summarySlot ? <div className="min-w-0">{summarySlot}</div> : null}
+        </div>
+      )}
     </div>
   );
 }

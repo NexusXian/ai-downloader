@@ -11,6 +11,7 @@ __pycache__/
 
 # downloaded media (transient)
 backend/_jobs/
+backend/_summary_jobs/
 
 # node / next
 frontend/node_modules/

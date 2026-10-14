@@ -31,9 +31,13 @@ def _bool(name: str, default: bool = False) -> bool:
 # Dedicated dir, not bare /tmp: the TTL sweeper deletes everything it owns, so it
 # must not share a directory with other processes' files.
 JOB_DIR = Path(os.getenv("JOB_DIR") or (Path(__file__).parent / "_jobs")).resolve()
+SUMMARY_JOB_DIR = Path(
+    os.getenv("SUMMARY_JOB_DIR") or (Path(__file__).parent / "_summary_jobs")
+).resolve()
 
 # How long a finished file stays downloadable before the sweeper reclaims it.
 JOB_TTL_SECONDS = _int("JOB_TTL_SECONDS", 3600)
+SUMMARY_JOB_TTL_SECONDS = _int("SUMMARY_JOB_TTL_SECONDS", 3600)
 SWEEP_INTERVAL_SECONDS = _int("SWEEP_INTERVAL_SECONDS", 300)
 
 # --- concurrency -------------------------------------------------------------
@@ -41,6 +45,8 @@ SWEEP_INTERVAL_SECONDS = _int("SWEEP_INTERVAL_SECONDS", 300)
 # there blocks the event loop, and anyio's default thread limiter is 40 tokens
 # shared with all other sync request handling.
 MAX_WORKERS = _int("MAX_WORKERS", 4)
+AI_MAX_WORKERS = max(1, _int("AI_MAX_WORKERS", 1))
+AI_MAX_QUEUED_JOBS = max(1, _int("AI_MAX_QUEUED_JOBS", 10))
 
 # --- limits ------------------------------------------------------------------
 MAX_FILESIZE_BYTES = _int("MAX_FILESIZE_MB", 2048) * 1024 * 1024
@@ -82,7 +88,11 @@ REDEEM_CODES = [
 # --- integrations ------------------------------------------------------------
 ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
 AI_MODEL = os.getenv("AI_MODEL", "claude-sonnet-5")
+AI_BASE_URL = (os.getenv("AI_BASE_URL") or "").strip()
 AI_ENABLED = bool(ANTHROPIC_API_KEY)
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small").strip() or "small"
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu").strip() or "cpu"
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
 
 # Optional Netscape-format cookies.txt for sites that demand a login. JSON cookie
 # exports are rejected by yt-dlp with a confusing error, so the format matters.

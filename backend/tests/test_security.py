@@ -139,7 +139,7 @@ def test_sanitize_filename_strips_traversal_dots():
 
 
 @pytest.mark.parametrize("raw,expected", [
-    ("mp4", "mp4"), (".MP4", "mp4"), ("mp3", "mp3"), ("srt", "srt"),
+    ("mp4", "mp4"), (".MP4", "mp4"), ("mp3", "mp3"), ("srt", "srt"), ("md", "md"),
     ("exe", "mp4"), ("sh", "mp4"), ("conf", "mp4"), (None, "mp4"), ("", "mp4"),
 ])
 def test_safe_ext_allowlist(raw, expected):
@@ -178,7 +178,7 @@ def test_content_disposition_no_header_injection():
 
 @pytest.mark.parametrize("ext,expected", [
     ("mp4", "video/mp4"), ("mp3", "audio/mpeg"), ("srt", "application/x-subrip"),
-    ("webm", "video/webm"), ("zip", "application/zip"),
+    ("webm", "video/webm"), ("zip", "application/zip"), ("md", "text/markdown"),
 ])
 def test_content_type_is_specific(ext, expected):
     assert content_type_for(ext) == expected

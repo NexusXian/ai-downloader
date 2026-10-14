@@ -13,9 +13,19 @@ import { FAQ, Features, Footer, PlatformStrip, Steps } from "@/components/sectio
 export default function Home() {
   const [limits, setLimits] = React.useState<Limits | null>(null);
   const [probe, setProbe] = React.useState<ProbeResult | null>(null);
+  const [playableJobId, setPlayableJobId] = React.useState<string | null>(null);
   const [upgradeSignal, setUpgradeSignal] = React.useState(0);
+  const [tokenRenewalSignal, setTokenRenewalSignal] = React.useState(0);
   const [offline, setOffline] = React.useState(false);
   const [hasToken, setHasToken] = React.useState(false);
+
+  // Reuse the previous object for the same URL: AI state is keyed by probe URL, so
+  // an equal-but-new result would remount the panel and restart a running summary.
+  const handleProbed = React.useCallback((next: ProbeResult | null) => {
+    setProbe((current) =>
+      current && next && current.url === next.url ? current : next,
+    );
+  }, []);
 
   const refreshLimits = React.useCallback(async () => {
     setHasToken(!!getToken());
@@ -44,6 +54,11 @@ export default function Home() {
     document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  const handleRedeemed = React.useCallback(() => {
+    setTokenRenewalSignal((signal) => signal + 1);
+    void refreshLimits();
+  }, [refreshLimits]);
+
   const isPro = limits?.is_pro ?? false;
 
   return (
@@ -71,33 +86,59 @@ export default function Home() {
         />
 
         <section className="relative px-4 pb-4 pt-14 sm:pt-20">
-          <div className="mx-auto max-w-4xl text-center">
-            <div className="animate-rise flex justify-center">
-              <Badge tone="gold" className="px-3 py-1">
-                <Icon path={P.bolt} className="size-3.5" fill />
-                已支持 1800+ 平台 · 手机电脑都能存
-              </Badge>
+          <div className="mx-auto max-w-6xl text-center">
+            {/* Collapses once a video loads so the workspace fits one screen. */}
+            <div className="mx-auto max-w-4xl">
+              {!probe && (
+                <div className="animate-rise flex justify-center">
+                  <Badge tone="gold" className="px-3 py-1">
+                    <Icon path={P.bolt} className="size-3.5" fill />
+                    已支持 1800+ 平台 · 手机电脑都能存
+                  </Badge>
+                </div>
+              )}
+
+              <h1
+                className={
+                  probe
+                    ? "text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl"
+                    : "animate-rise mt-6 text-4xl font-bold leading-[1.15] tracking-tight text-ink-900 sm:text-6xl"
+                }
+                style={probe ? undefined : { animationDelay: "60ms" }}
+              >
+                想存的视频，
+                <br className="sm:hidden" />
+                <span className="text-gradient-brand">一粘就下</span>
+              </h1>
+
+              {!probe && (
+                <p
+                  className="animate-rise mx-auto mt-5 max-w-2xl text-[15px] leading-relaxed text-ink-500 sm:text-lg"
+                  style={{ animationDelay: "120ms" }}
+                >
+                  不用装软件，不用注册。粘贴链接就能保存高清原画、提取 MP3、下载字幕，
+                  还能批量处理整个合集 —— 手机上也一样好用。
+                </p>
+              )}
             </div>
 
-            <h1
-              className="animate-rise mt-6 text-4xl font-bold leading-[1.15] tracking-tight text-ink-900 sm:text-6xl"
-              style={{ animationDelay: "60ms" }}
-            >
-              想存的视频，
-              <br className="sm:hidden" />
-              <span className="text-gradient-brand">一粘就下</span>
-            </h1>
-
-            <p
-              className="animate-rise mx-auto mt-5 max-w-2xl text-[15px] leading-relaxed text-ink-500 sm:text-lg"
-              style={{ animationDelay: "120ms" }}
-            >
-              不用装软件，不用注册。粘贴链接就能保存高清原画、提取 MP3、下载字幕，
-              还能批量处理整个合集 —— 手机上也一样好用。
-            </p>
-
             <div className="animate-rise mt-9" style={{ animationDelay: "180ms" }}>
-              <Downloader limits={limits} onUpgrade={openUpgrade} onProbed={setProbe} />
+              <Downloader
+                limits={limits}
+                onUpgrade={openUpgrade}
+                onProbed={handleProbed}
+                onPlayableJob={setPlayableJobId}
+                summarySlot={
+                  <AIPanel
+                    key={probe?.url ?? "no-probe"}
+                    limits={limits}
+                    probe={probe}
+                    onUpgrade={openUpgrade}
+                    tokenRenewalSignal={tokenRenewalSignal}
+                    playableJobId={playableJobId}
+                  />
+                }
+              />
             </div>
 
             {offline && (
@@ -106,23 +147,23 @@ export default function Home() {
               </p>
             )}
 
-            <PlatformStrip />
+            {/* Hidden once a video is loaded: the workspace needs the vertical space. */}
+            {!probe && <PlatformStrip />}
           </div>
         </section>
 
         <Steps />
 
         <section className="relative px-4 py-8">
-          <div className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-2">
+          <div className="mx-auto max-w-3xl">
             <BatchPanel limits={limits} onUpgrade={openUpgrade} />
-            <AIPanel limits={limits} probe={probe} onUpgrade={openUpgrade} />
           </div>
         </section>
 
         <Features />
         <Pricing
           limits={limits}
-          onRedeemed={refreshLimits}
+          onRedeemed={handleRedeemed}
           openSignal={upgradeSignal}
         />
         <FAQ />

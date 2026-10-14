@@ -152,6 +152,36 @@ body {
   animation: shimmer 1.4s linear infinite;
 }
 
+/* Mind map canvas. markmap renders node text into foreignObject, so the label
+   styling has to be declared here rather than through utility classes. */
+.mind-map-canvas {
+  --markmap-font: 500 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  --markmap-text-color: #0f172a;
+  --markmap-a-color: #0284c7;
+  cursor: grab;
+}
+.mind-map-canvas:active {
+  cursor: grabbing;
+}
+.mind-map-canvas div {
+  font: var(--markmap-font);
+  color: var(--markmap-text-color);
+}
+.mind-map-canvas .mm-time {
+  margin-inline-start: 0.4rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.3rem;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.mind-map-canvas .mm-time:hover {
+  background: #0284c7;
+  color: #ffffff;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

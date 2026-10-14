@@ -128,7 +128,7 @@ def validate_url(url: str, *, resolve: bool = True) -> str:
 SAFE_EXTS = frozenset({
     "mp4", "mkv", "webm", "mov", "m4v", "flv", "avi",
     "mp3", "m4a", "aac", "opus", "flac", "wav", "ogg",
-    "srt", "vtt", "ass", "zip",
+    "srt", "vtt", "ass", "zip", "md", "json", "opml",
 })
 
 _UNSAFE_CHARS = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
@@ -159,12 +159,15 @@ def sanitize_filename(name: str, *, max_length: int = 80) -> str:
     return name
 
 
-def content_disposition(filename: str) -> str:
+def content_disposition(filename: str, *, inline: bool = False) -> str:
     """Build a Content-Disposition value that survives Chinese filenames.
 
     Emits both forms per RFC 5987/6266: a plain-ASCII `filename` fallback and a
     percent-encoded `filename*`. The ASCII fallback stays genuinely plain --
     Safari mishandles percent-escapes there, so encoding it breaks the fallback.
+
+    `inline` is for in-page playback: Chrome refuses to play a media element whose
+    response is marked as an attachment.
     """
     ascii_name = filename.encode("ascii", "ignore").decode("ascii").strip()
     ascii_name = _UNSAFE_CHARS.sub("", ascii_name).strip()
@@ -172,7 +175,8 @@ def content_disposition(filename: str) -> str:
         ext = filename.rsplit(".", 1)[-1] if "." in filename else "mp4"
         ascii_name = f"video.{safe_ext(ext)}"
     encoded = quote(filename, safe="")
-    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+    kind = "inline" if inline else "attachment"
+    return f'{kind}; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
 
 
 CONTENT_TYPES = {
@@ -183,7 +187,8 @@ CONTENT_TYPES = {
     "opus": "audio/opus", "flac": "audio/flac", "wav": "audio/wav",
     "ogg": "audio/ogg",
     "srt": "application/x-subrip", "vtt": "text/vtt", "ass": "text/plain",
-    "zip": "application/zip",
+    "zip": "application/zip", "md": "text/markdown",
+    "json": "application/json", "opml": "text/x-opml",
 }
 
 

@@ -148,6 +148,195 @@ def test_selector_opt_out_of_compatibility():
     assert "avc1" not in downloader.build_format_selector(1080, prefer_compatible=False)
 
 
+def test_probe_uses_shared_extract_info_result(monkeypatch):
+    seen = {"extract_calls": []}
+    source_info = {
+        "_type": "playlist",
+        "entries": [{
+            "webpage_url": "https://example.com/watch/first",
+            "title": "First video",
+            "duration": 12,
+            "thumbnail": "http://cdn.example.com/thumb.jpg",
+            "uploader": "Uploader",
+            "extractor_key": "Example",
+            "formats": [{"height": 720, "vcodec": "avc1.64001f", "has_drm": False}],
+            "subtitles": {"en": [{"ext": "vtt"}]},
+            "automatic_captions": {},
+        }],
+    }
+
+    class StubYoutubeDL:
+        def __init__(self, opts):
+            seen["opts"] = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def extract_info(self, url, *, download):
+            seen["extract_calls"].append((url, download))
+            return source_info
+
+        def sanitize_info(self, info):
+            return info
+
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", StubYoutubeDL)
+    shared_extract_info = downloader.extract_info
+    shared_calls = []
+
+    def recording_extract_info(url):
+        shared_calls.append(url)
+        return shared_extract_info(url)
+
+    monkeypatch.setattr(downloader, "extract_info", recording_extract_info)
+    got = downloader.probe("https://example.com/playlist")
+
+    assert shared_calls == ["https://example.com/playlist"]
+    assert seen["extract_calls"] == [("https://example.com/playlist", False)]
+    assert seen["opts"]["skip_download"] is True
+    assert got["title"] == "First video"
+    assert got["thumbnail"] == "https://cdn.example.com/thumb.jpg"
+    assert got["subtitles"] == ["en"]
+
+
+def test_download_source_audio_keeps_source_format(monkeypatch, tmp_path):
+    captured = {}
+    expected = tmp_path / "source.webm"
+
+    def fake_run(url, opts, out_stem, *, default_ext, subtitle=False):
+        captured.update({
+            "url": url,
+            "opts": opts,
+            "out_stem": out_stem,
+            "default_ext": default_ext,
+            "subtitle": subtitle,
+        })
+        return expected
+
+    monkeypatch.setattr(downloader, "_run", fake_run)
+    got = downloader.download_source_audio(
+        "https://example.com/v", tmp_path / "source", lambda _progress: None,
+    )
+
+    assert got == expected
+    assert captured["opts"]["format"] == "bestaudio/best"
+    assert "postprocessors" not in captured["opts"]
+    assert captured["default_ext"] == "m4a"
+
+
+def test_read_caption_track_validates_and_decodes_url(monkeypatch):
+    signed_url = "https://captions.example.com/subtitle?sig=signed"
+    seen = {}
+
+    class Response:
+        def read(self, limit):
+            seen["read_limit"] = limit
+            return b"Hello \xff"
+
+    class StubYoutubeDL:
+        def __init__(self, opts):
+            seen["opts"] = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def urlopen(self, url):
+            seen["url"] = url
+            return Response()
+
+    def validate_url(url):
+        seen["validated_url"] = url
+        return url
+
+    monkeypatch.setattr(downloader.security, "validate_url", validate_url)
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", StubYoutubeDL)
+
+    ext, raw = downloader.read_caption_track({"ext": "VTT", "url": signed_url})
+
+    assert ext == "vtt"
+    assert raw == "Hello �"
+    assert seen["validated_url"] == signed_url
+    assert seen["url"] == signed_url
+    assert seen["read_limit"] == downloader.MAX_CAPTION_BYTES + 1
+
+
+def test_read_caption_track_hides_signed_url_on_failure(monkeypatch):
+    signed_url = "https://captions.example.com/subtitle?sig=secret"
+
+    class StubYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def urlopen(self, url):
+            raise RuntimeError(f"failed to read {url}")
+
+    monkeypatch.setattr(downloader.security, "validate_url", lambda url: url)
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", StubYoutubeDL)
+
+    with pytest.raises(downloader.ProbeError, match="^字幕下载失败$") as exc_info:
+        downloader.read_caption_track({"ext": "vtt", "url": signed_url})
+
+    assert signed_url not in str(exc_info.value)
+
+
+def test_caption_payload_limit_is_ten_mib():
+    assert downloader.MAX_CAPTION_BYTES == 10 * 1024 * 1024
+
+
+def test_read_caption_track_rejects_remote_payload_at_limit_plus_one(monkeypatch):
+    seen = []
+
+    class Response:
+        def read(self, limit=None):
+            seen.append(limit)
+            return b"x" * (downloader.MAX_CAPTION_BYTES + 1)
+
+    class StubYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def urlopen(self, _url):
+            return Response()
+
+    monkeypatch.setattr(downloader.security, "validate_url", lambda url: url)
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", StubYoutubeDL)
+
+    with pytest.raises(downloader.ProbeError, match="^字幕文件过大$"):
+        downloader.read_caption_track({
+            "ext": "vtt",
+            "url": "https://captions.example.com/subtitle",
+        })
+
+    assert seen == [downloader.MAX_CAPTION_BYTES + 1]
+
+
+@pytest.mark.parametrize("data", [b"123456", "你你"])
+def test_read_caption_track_measures_embedded_payload_bytes(
+    monkeypatch, data,
+):
+    monkeypatch.setattr(downloader, "MAX_CAPTION_BYTES", 5)
+
+    with pytest.raises(downloader.ProbeError, match="^字幕文件过大$"):
+        downloader.read_caption_track({"ext": "vtt", "data": data})
+
+
 # --- error translation -------------------------------------------------------
 
 @pytest.mark.parametrize("raw,needle", [

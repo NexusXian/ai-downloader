@@ -18,12 +18,14 @@ from typing import Any, Callable
 import yt_dlp
 
 import config
+import security
 from security import safe_ext
 
 log = logging.getLogger(__name__)
 
 # Resolutions we offer in the picker, coarse enough to keep the UI legible.
 QUALITY_LADDER = [2160, 1440, 1080, 720, 480, 360]
+MAX_CAPTION_BYTES = 10 * 1024 * 1024
 
 
 class ProbeError(RuntimeError):
@@ -137,8 +139,8 @@ def _shape_formats(info: dict[str, Any], max_height: int) -> list[dict[str, Any]
     return options
 
 
-def probe(url: str) -> dict[str, Any]:
-    """Fetch metadata without downloading. Raises ProbeError with a usable message."""
+def extract_info(url: str) -> dict[str, Any]:
+    """Return normalized, sanitized yt-dlp metadata after shared media checks."""
     opts = _base_opts() | {"skip_download": True}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -166,6 +168,19 @@ def probe(url: str) -> dict[str, Any]:
             f"上限 {config.MAX_DURATION_SECONDS // 60} 分钟）"
         )
 
+    all_formats = info.get("formats") or []
+    # 'maybe' is a real value here, not just True/False.
+    drm_only = bool(all_formats) and all(f.get("has_drm") for f in all_formats)
+    if drm_only:
+        raise ProbeError("该视频受 DRM 保护，无法下载")
+
+    return info
+
+
+def probe(url: str) -> dict[str, Any]:
+    """Fetch metadata without downloading. Raises ProbeError with a usable message."""
+    info = extract_info(url)
+    duration = info.get("duration")
     subs = info.get("subtitles") or {}
     autos = info.get("automatic_captions") or {}
 
@@ -174,12 +189,6 @@ def probe(url: str) -> dict[str, Any]:
     thumbnail = info.get("thumbnail")
     if thumbnail and thumbnail.startswith("http://"):
         thumbnail = "https://" + thumbnail[len("http://"):]
-
-    all_formats = info.get("formats") or []
-    # 'maybe' is a real value here, not just True/False.
-    drm_only = bool(all_formats) and all(f.get("has_drm") for f in all_formats)
-    if drm_only:
-        raise ProbeError("该视频受 DRM 保护，无法下载")
 
     return {
         "url": info.get("webpage_url") or url,
@@ -221,6 +230,38 @@ def _friendly_error(raw: str) -> str:
     # Strip yt-dlp's "ERROR: [extractor] id:" prefix noise for readability.
     cleaned = raw.split(";")[0].replace("ERROR: ", "").strip()
     return cleaned[:200] or "解析失败"
+
+
+def read_caption_track(track: dict[str, Any]) -> tuple[str, str]:
+    """Return a supported caption extension and UTF-8 text."""
+    try:
+        ext = str(track.get("ext") or "").lower()
+        data = track.get("data")
+        if data is not None:
+            if isinstance(data, bytes):
+                if len(data) > MAX_CAPTION_BYTES:
+                    raise ProbeError("字幕文件过大")
+                return ext, data.decode("utf-8", "replace")
+            text = str(data)
+            if len(text.encode("utf-8")) > MAX_CAPTION_BYTES:
+                raise ProbeError("字幕文件过大")
+            return ext, text
+
+        url = security.validate_url(str(track["url"]))
+        with yt_dlp.YoutubeDL(_base_opts()) as ydl:
+            raw = ydl.urlopen(url).read(MAX_CAPTION_BYTES + 1)
+        if isinstance(raw, str):
+            if len(raw.encode("utf-8")) > MAX_CAPTION_BYTES:
+                raise ProbeError("字幕文件过大")
+            return ext, raw
+        payload = bytes(raw)
+        if len(payload) > MAX_CAPTION_BYTES:
+            raise ProbeError("字幕文件过大")
+        return ext, payload.decode("utf-8", "replace")
+    except ProbeError:
+        raise
+    except Exception:
+        raise ProbeError("字幕下载失败") from None
 
 
 # --- download ----------------------------------------------------------------
@@ -292,6 +333,17 @@ def download_audio(url: str, out_stem: Path, on_progress: ProgressFn) -> Path:
         }],
     }
     return _run(url, opts, out_stem, default_ext="mp3")
+
+
+def download_source_audio(
+    url: str, out_stem: Path, on_progress: ProgressFn
+) -> Path:
+    opts = _base_opts() | _hooks(on_progress) | {
+        "format": "bestaudio/best",
+        "outtmpl": f"{out_stem}.%(ext)s",
+        "max_filesize": config.MAX_FILESIZE_BYTES,
+    }
+    return _run(url, opts, out_stem, default_ext="m4a")
 
 
 def download_subtitle(
